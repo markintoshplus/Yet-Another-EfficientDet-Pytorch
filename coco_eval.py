@@ -4,7 +4,7 @@
 COCO-Style Evaluations
 
 put images here datasets/your_project_name/val_set_name/*.jpg
-put annotations here datasets/your_project_name/annotations/{val_set_name}_annotations.coco.json
+put annotations here datasets/your_project_name/annotations/instances_{val_set_name}.json
 put weights here /path/to/your/weights/*.pth
 change compound_coef
 
@@ -58,21 +58,12 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
     regressBoxes = BBoxTransform()
     clipBoxes = ClipBoxes()
 
-    batch_size = 1  # Process one image at a time
-    for i in tqdm(range(0, len(image_ids), batch_size)):
-        batch_ids = image_ids[i:i+batch_size]
-        batch_imgs = []
-        batch_metas = []
+    for image_id in tqdm(image_ids):
+        image_info = coco.loadImgs(image_id)[0]
+        image_path = img_path + image_info['file_name']
 
-        for image_id in batch_ids:
-            image_info = coco.loadImgs(image_id)[0]
-            image_path = img_path + image_info['file_name']
-
-            ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
-            batch_imgs.extend(framed_imgs)
-            batch_metas.extend(framed_metas)
-
-        x = torch.stack([torch.from_numpy(fi) for fi in batch_imgs], 0)
+        ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
+        x = torch.from_numpy(framed_imgs[0])
 
         if use_cuda:
             x = x.cuda(gpu)
@@ -83,61 +74,43 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
         else:
             x = x.float()
 
-        x = x.permute(0, 3, 1, 2)
+        x = x.unsqueeze(0).permute(0, 3, 1, 2)
+        features, regression, classification, anchors = model(x)
 
-        with torch.no_grad():
-            features, regression, classification, anchors = model(x)
+        preds = postprocess(x,
+                            anchors, regression, classification,
+                            regressBoxes, clipBoxes,
+                            threshold, nms_threshold)
+        
+        if not preds:
+            continue
 
-            out = postprocess(x,
-                              anchors, regression, classification,
-                              regressBoxes, clipBoxes,
-                              threshold, nms_threshold)
+        preds = invert_affine(framed_metas, preds)[0]
 
-        print(f"Processing batch {i+1}/{len(image_ids)//batch_size}")
-        print(f"out length: {len(out)}")
-        for j, image_id in enumerate(batch_ids):
-            print(f"Processing image {j+1}/{len(batch_ids)}, image_id: {image_id}")
-            if j >= len(out):
-                print(f"Warning: j ({j}) is out of range for out (length {len(out)})")
-                continue
-            
-            print(f"out[{j}] keys: {out[j].keys()}")
-            if 'rois' not in out[j]:
-                print(f"Warning: 'rois' not in out[{j}]")
-                continue
-            
-            if len(out[j]['rois']) == 0:
-                print(f"No predictions for image {image_id}")
-                continue
+        scores = preds['scores']
+        class_ids = preds['class_ids']
+        rois = preds['rois']
 
-            preds = invert_affine(batch_metas[j], out[j])
-            scores = preds['scores']
-            class_ids = preds['class_ids']
-            rois = preds['rois']
+        if rois.shape[0] > 0:
+            # x1,y1,x2,y2 -> x1,y1,w,h
+            rois[:, 2] -= rois[:, 0]
+            rois[:, 3] -= rois[:, 1]
 
-            if rois.shape[0] > 0:
-                # x1,y1,x2,y2 -> x1,y1,w,h
-                rois[:, 2] -= rois[:, 0]
-                rois[:, 3] -= rois[:, 1]
+            bbox_score = scores
 
-                bbox_score = scores
+            for roi_id in range(rois.shape[0]):
+                score = float(bbox_score[roi_id])
+                label = int(class_ids[roi_id])
+                box = rois[roi_id, :]
 
-                for roi_id in range(rois.shape[0]):
-                    score = float(bbox_score[roi_id])
-                    label = int(class_ids[roi_id])
-                    box = rois[roi_id, :]
+                image_result = {
+                    'image_id': image_id,
+                    'category_id': label + 1,
+                    'score': float(score),
+                    'bbox': box.tolist(),
+                }
 
-                    image_result = {
-                        'image_id': image_id,
-                        'category_id': label + 1,
-                        'score': float(score),
-                        'bbox': box.tolist(),
-                    }
-
-                    results.append(image_result)
-
-        # Clear GPU cache
-        torch.cuda.empty_cache()
+                results.append(image_result)
 
     if not len(results):
         raise Exception('the model does not provide any valid output, check model architecture and the data input')
@@ -164,31 +137,25 @@ def _eval(coco_gt, image_ids, pred_json_path):
 
 if __name__ == '__main__':
     SET_NAME = params['val_set']
-    VAL_GT = f'datasets/{params["project_name"]}/annotations/{SET_NAME}_annotations.coco.json'
+    VAL_GT = f'datasets/{params["project_name"]}/annotations/instances_{SET_NAME}.json'
     VAL_IMGS = f'datasets/{params["project_name"]}/{SET_NAME}/'
-    MAX_IMAGES = 300  # Limit the number of images to evaluate
+    MAX_IMAGES = 10000
     coco_gt = COCO(VAL_GT)
-
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
+    
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+        model = EfficientDetBackbone(compound_coef=compound_coef, num_classes=len(obj_list),
+                                     ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
+        model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
+        model.requires_grad_(False)
+        model.eval()
 
-    # Get the latest weight file
-    weight_files = [f for f in os.listdir(f'logs/{project_name}') if f.endswith('.pth')]
-    if not weight_files:
-        raise FileNotFoundError(f"No weight files found in logs/{project_name}")
-    latest_weight = max(weight_files, key=lambda f: os.path.getmtime(os.path.join(f'logs/{project_name}', f)))
-    weights_path = os.path.join(f'logs/{project_name}', latest_weight)
+        if use_cuda:
+            model.cuda(gpu)
 
-    print(f'Using weights: {weights_path}')
+            if use_float16:
+                model.half()
 
-    model = EfficientDetBackbone(compound_coef=compound_coef, num_classes=len(obj_list),
-                                 ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
-    model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
-
-    if use_cuda:
-        model.cuda(gpu)
-
-    model.eval()
-
-    evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, model)
+        evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, model)
 
     _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')

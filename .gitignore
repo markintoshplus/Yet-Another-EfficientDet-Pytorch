@@ -129,9 +129,3 @@ dmypy.json
 .pyre/
 .idea/
 weights/
-
-# Test folder
-test/
-
-# Logs folder
-logs/

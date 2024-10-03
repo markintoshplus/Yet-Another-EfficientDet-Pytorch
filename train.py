@@ -17,7 +17,7 @@ from torchvision import transforms
 from tqdm.autonotebook import tqdm
 
 from backbone import EfficientDetBackbone
-from efficientdet.dataset import CocoDataset, collater, get_train_transform, get_val_transform
+from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from efficientdet.loss import FocalLoss
 from utils.sync_batchnorm import patch_replication_callback
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
@@ -111,11 +111,14 @@ def train(opt):
 
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
     training_set = CocoDataset(root_dir=os.path.join(opt.data_path, params.project_name), set=params.train_set,
-                               transform=get_train_transform())
+                               transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
+                                                             Augmenter(),
+                                                             Resizer(input_sizes[opt.compound_coef])]))
     training_generator = DataLoader(training_set, **training_params)
 
     val_set = CocoDataset(root_dir=os.path.join(opt.data_path, params.project_name), set=params.val_set,
-                          transform=get_val_transform())
+                          transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
+                                                        Resizer(input_sizes[opt.compound_coef])]))
     val_generator = DataLoader(val_set, **val_params)
 
     model = EfficientDetBackbone(num_classes=len(params.obj_list), compound_coef=opt.compound_coef,
@@ -183,11 +186,11 @@ def train(opt):
                 patch_replication_callback(model)
 
     if opt.optim == 'adamw':
-        optimizer = torch.optim.AdamW(model.parameters(), opt.lr, weight_decay=1e-3)
+        optimizer = torch.optim.AdamW(model.parameters(), opt.lr)
     else:
         optimizer = torch.optim.SGD(model.parameters(), opt.lr, momentum=0.9, nesterov=True)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=opt.num_epochs)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
 
     epoch = 0
     best_loss = 1e5
@@ -229,7 +232,7 @@ def train(opt):
                         continue
 
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                     optimizer.step()
 
                     epoch_loss.append(float(loss))
