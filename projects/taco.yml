@@ -1,0 +1,82 @@
+project_name: taco # folder name of the dataset under data_path folder
+train_set: train
+val_set: val
+test_set: test
+num_gpus: 1
+
+# mean and std in RGB order, calculated from the dataset
+mean: [0.48165402, 0.45629412, 0.40562084]
+std: [0.20295075, 0.19418404, 0.18639994]
+
+# anchor scales and ratios based on the dataset analysis
+anchors_scales: "[10, 20, 30]"
+anchors_ratios: "[(0.7, 1.0), (0.8, 1.0), (0.6, 1.0)]"
+
+# obj_list for TACO dataset
+obj_list:
+  [
+    "garbage",
+    "Aerosol",
+    "Aluminium blister pack",
+    "Aluminium foil",
+    "Battery",
+    "Broken glass",
+    "Carded blister pack",
+    "Cigarette",
+    "Clear plastic bottle",
+    "Corrugated carton",
+    "Crisp packet",
+    "Disposable food container",
+    "Disposable plastic cup",
+    "Drink can",
+    "Drink carton",
+    "Egg carton",
+    "Foam cup",
+    "Foam food container",
+    "Food Can",
+    "Food waste",
+    "Garbage bag",
+    "Glass bottle",
+    "Glass cup",
+    "Glass jar",
+    "Magazine paper",
+    "Meal carton",
+    "Metal bottle cap",
+    "Metal lid",
+    "Normal paper",
+    "Other carton",
+    "Other plastic",
+    "Other plastic bottle",
+    "Other plastic container",
+    "Other plastic cup",
+    "Other plastic wrapper",
+    "Paper bag",
+    "Paper cup",
+    "Paper straw",
+    "Pizza box",
+    "Plastic bottle cap",
+    "Plastic film",
+    "Plastic glooves",
+    "Plastic lid",
+    "Plastic straw",
+    "Plastic utensils",
+    "Polypropylene bag",
+    "Pop tab",
+    "Rope - strings",
+    "Scrap metal",
+    "Shoe",
+    "Single-use carrier bag",
+    "Six pack rings",
+    "Spread tub",
+    "Squeezable tube",
+    "Styrofoam piece",
+    "Tissues",
+    "Toilet tube",
+    "Tupperware",
+    "Unlabeled litter",
+    "Wrapping paper"
+  ]
+
+# Additional dataset information
+img_size: 640
+augmentation: True
