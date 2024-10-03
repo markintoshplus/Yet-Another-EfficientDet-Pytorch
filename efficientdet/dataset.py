@@ -5,6 +5,8 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from pycocotools.coco import COCO
 import cv2
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 
 class CocoDataset(Dataset):
@@ -18,6 +20,11 @@ class CocoDataset(Dataset):
         self.image_ids = self.coco.getImgIds()
 
         self.load_classes()
+
+        if set == 'train2017':
+            self.transform = get_train_transform()
+        else:
+            self.transform = get_val_transform()
 
     def load_classes(self):
 
@@ -37,22 +44,32 @@ class CocoDataset(Dataset):
     def __len__(self):
         return len(self.image_ids)
 
-    def __getitem__(self, idx):
-
-        img = self.load_image(idx)
-        annot = self.load_annotations(idx)
-        sample = {'img': img, 'annot': annot}
-        if self.transform:
-            sample = self.transform(sample)
-        return sample
+    def __getitem__(self, index):
+        img = self.load_image(index)
+        annot = self.load_annotations(index)
+        
+        img_height, img_width = img.shape[:2]
+        
+        boxes = annot['bboxes']
+        labels = annot['category_id']
+        
+        # Normalize bounding boxes
+        normalized_boxes = [self.normalize_bbox(box, img_height, img_width) for box in boxes]
+        
+        transformed = self.transform(image=img, bboxes=normalized_boxes, category_ids=labels)
+        
+        img = transformed['image']
+        boxes = transformed['bboxes']
+        labels = transformed['category_ids']
+        
+        return {'img': img, 'annot': {'bboxes': boxes, 'category_id': labels}}
 
     def load_image(self, image_index):
         image_info = self.coco.loadImgs(self.image_ids[image_index])[0]
         path = os.path.join(self.root_dir, self.set_name, image_info['file_name'])
         img = cv2.imread(path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        return img.astype(np.float32) / 255.
+        return img
 
     def load_annotations(self, image_index):
         # get ground truth annotations
@@ -82,6 +99,18 @@ class CocoDataset(Dataset):
 
         return annotations
 
+    def normalize_bbox(self, bbox, img_height, img_width):
+        x1, y1, w, h = bbox
+        x2 = x1 + w
+        y2 = y1 + h
+        
+        x1 = max(0, min(x1 / img_width, 1.0))
+        y1 = max(0, min(y1 / img_height, 1.0))
+        x2 = max(0, min(x2 / img_width, 1.0))
+        y2 = max(0, min(y2 / img_height, 1.0))
+        
+        return [x1, y1, x2, y2]
+
 
 def collater(data):
     imgs = [s['img'] for s in data]
@@ -106,65 +135,26 @@ def collater(data):
 
     return {'img': imgs, 'annot': annot_padded, 'scale': scales}
 
+def get_train_transform():
+    return A.Compose([
+        A.RandomResizedCrop(height=640, width=640, scale=(0.8, 1.0)),
+        A.HorizontalFlip(p=0.5),
+        A.RandomBrightnessContrast(p=0.2),
+        A.RandomRotate90(p=0.5),
+        A.Blur(blur_limit=3, p=0.1),
+        A.CLAHE(clip_limit=4.0, p=0.2),
+        A.OneOf([
+            A.RandomGamma(),
+            A.HueSaturationValue(),
+        ], p=0.3),
+        A.ToGray(p=0.1),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
 
-class Resizer(object):
-    """Convert ndarrays in sample to Tensors."""
-    
-    def __init__(self, img_size=512):
-        self.img_size = img_size
-
-    def __call__(self, sample):
-        image, annots = sample['img'], sample['annot']
-        height, width, _ = image.shape
-        if height > width:
-            scale = self.img_size / height
-            resized_height = self.img_size
-            resized_width = int(width * scale)
-        else:
-            scale = self.img_size / width
-            resized_height = int(height * scale)
-            resized_width = self.img_size
-
-        image = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
-
-        new_image = np.zeros((self.img_size, self.img_size, 3))
-        new_image[0:resized_height, 0:resized_width] = image
-
-        annots[:, :4] *= scale
-
-        return {'img': torch.from_numpy(new_image).to(torch.float32), 'annot': torch.from_numpy(annots), 'scale': scale}
-
-
-class Augmenter(object):
-    """Convert ndarrays in sample to Tensors."""
-
-    def __call__(self, sample, flip_x=0.5):
-        if np.random.rand() < flip_x:
-            image, annots = sample['img'], sample['annot']
-            image = image[:, ::-1, :]
-
-            rows, cols, channels = image.shape
-
-            x1 = annots[:, 0].copy()
-            x2 = annots[:, 2].copy()
-
-            x_tmp = x1.copy()
-
-            annots[:, 0] = cols - x2
-            annots[:, 2] = cols - x_tmp
-
-            sample = {'img': image, 'annot': annots}
-
-        return sample
-
-
-class Normalizer(object):
-
-    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
-        self.mean = np.array([[mean]])
-        self.std = np.array([[std]])
-
-    def __call__(self, sample):
-        image, annots = sample['img'], sample['annot']
-
-        return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots}
+def get_val_transform():
+    return A.Compose([
+        A.Resize(height=640, width=640),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
