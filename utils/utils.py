@@ -114,9 +114,9 @@ def postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes,
             boxes_ = transformed_anchors_per[anchors_nms_idx, :]
 
             out.append({
-                'rois': boxes_.cpu().numpy(),
-                'class_ids': classes_.cpu().numpy(),
-                'scores': scores_.cpu().numpy(),
+                'rois': boxes_.detach().cpu().numpy(),
+                'class_ids': classes_.detach().cpu().numpy(),
+                'scores': scores_.detach().cpu().numpy(),
             })
         else:
             out.append({
@@ -136,7 +136,7 @@ def display(preds, imgs, obj_list, imshow=True, imwrite=False):
         imgs[i] = imgs[i].copy()
 
         for j in range(len(preds[i]['rois'])):
-            (x1, y1, x2, y2) = preds[i]['rois'][j].astype(np.int)
+            (x1, y1, x2, y2) = preds[i]['rois'][j].astype(int)
             obj = obj_list[preds[i]['class_ids'][j]]
             score = float(preds[i]['scores'][j])
 
