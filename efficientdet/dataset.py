@@ -8,16 +8,27 @@ import cv2
 
 
 class CocoDataset(Dataset):
-    def __init__(self, root_dir, set='train2017', transform=None):
-
+    def __init__(self, root_dir, set='train', transform=None, mean=None, std=None):
         self.root_dir = root_dir
         self.set_name = set
         self.transform = transform
 
-        self.coco = COCO(os.path.join(self.root_dir, 'annotations', 'instances_' + self.set_name + '.json'))
+        # Use the provided mean and std values
+        self.mean = np.array(mean) if mean is not None else np.array([0.485, 0.456, 0.406])
+        self.std = np.array(std) if std is not None else np.array([0.229, 0.224, 0.225])
+
+        # Update the annotation file name
+        annotation_file = os.path.join(self.root_dir, 'annotations', f'{self.set_name}_annotations.coco.json')
+        print(f"Attempting to open annotation file: {annotation_file}")  # Debug print
+        self.coco = COCO(annotation_file)
+
         self.image_ids = self.coco.getImgIds()
 
         self.load_classes()
+
+        print(f"Number of images: {len(self.image_ids)}")
+        print(f"Number of categories: {len(self.coco.getCatIds())}")
+        print(f"Categories: {self.coco.loadCats(self.coco.getCatIds())}")
 
     def load_classes(self):
 
@@ -66,14 +77,13 @@ class CocoDataset(Dataset):
         # parse annotations
         coco_annotations = self.coco.loadAnns(annotations_ids)
         for idx, a in enumerate(coco_annotations):
-
             # some annotations have basically no width / height, skip them
             if a['bbox'][2] < 1 or a['bbox'][3] < 1:
                 continue
 
             annotation = np.zeros((1, 5))
             annotation[0, :4] = a['bbox']
-            annotation[0, 4] = a['category_id'] - 1
+            annotation[0, 4] = self.coco.getCatIds().index(a['category_id'])  # Use index instead of subtracting 1
             annotations = np.append(annotations, annotation, axis=0)
 
         # transform from [x, y, w, h] to [x1, y1, x2, y2]
@@ -81,6 +91,10 @@ class CocoDataset(Dataset):
         annotations[:, 3] = annotations[:, 1] + annotations[:, 3]
 
         return annotations
+
+    def get_image_info(self, image_index):
+        image_info = self.coco.loadImgs(self.image_ids[image_index])[0]
+        return image_info
 
 
 def collater(data):
